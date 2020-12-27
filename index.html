@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh">
+<title>分享几道简单的算法题</title>
+<script src="https://cdn.jsdelivr.net/npm/texme@0.9.0"></script>
+<textarea>
+
+# 几道简单的算法题
+
+1、输入一个字符串，输出该字符串中字符a的个数，若没有输出0，如输入`sdfaadeea`，输出3
+
+```java
+import java.util.Scanner;
+
+public class Solution {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        String s = in.nextLine();
+        int count = countLetters(s);
+        System.out.println(count);
+    }
+
+    private static int countLetters(String s) {
+        int count = 0;
+        for (char c : s.toCharArray()) {
+            if (c == 'a') {
+                count++;
+            }
+        }
+        return count;
+    }
+}
+```
+
+2、输入一个字符串，输出该字符串中出现最多次的字符，次数相同的字符按字母表顺序取第一个，如输入`ddaaccccb`，输出c
+
+```java
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Scanner;
+
+public class Solution {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        String s = in.nextLine();
+        char letter = maxCountLetter(s);
+        System.out.println(letter);
+    }
+
+    private static char maxCountLetter(String s) {
+        Map<Character, Integer> map = new HashMap<>();
+        for (char c : s.toCharArray()) {
+            map.put(c, map.getOrDefault(c, 0) + 1);
+        }
+        int count = 0;
+        char c = s.charAt(0);
+        for (Map.Entry<Character, Integer> entry : map.entrySet()) {
+            if (entry.getValue() > count) {
+                count = entry.getValue();
+                c = entry.getKey();
+            } else if (entry.getValue() == count) {
+                if (entry.getKey() < c) {
+                    c = entry.getKey();
+                }
+            }
+        }
+        return c;
+    }
+}
+
+```
+
+3、输入一个字符串，按字符出现频次从高到低排序输出相同个数的字符，频次相同按字母表顺序，如输入`ddaaccccb`，输出`ccccaaddb`
+
+```java
+import java.util.HashMap;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Scanner;
+
+public class Solution {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        String s = in.nextLine();
+        String letters = sortLetters(s);
+        System.out.println(letters);
+    }
+
+    private static String sortLetters(String s) {
+        Map<Character, Integer> map = new HashMap<>();
+        for (char c : s.toCharArray()) {
+            map.put(c, map.getOrDefault(c, 0) + 1);
+        }
+        PriorityQueue<Map.Entry<Character, Integer>> heap = new PriorityQueue<>((x, y) -> {
+            int remain = y.getValue() - x.getValue();
+            if (remain == 0) {
+                return x.getKey() - y.getKey();
+            }
+            return remain;
+        });
+        heap.addAll(map.entrySet());
+        StringBuilder sb = new StringBuilder();
+        while (!heap.isEmpty()) {
+            Map.Entry<Character, Integer> entry = heap.poll();
+            for (int i = 0; i < entry.getValue(); i++) {
+                sb.append(entry.getKey());
+            }
+        }
+        return sb.toString();
+    }
+}
+
+```
+
+4、输入5个数组，从每个数组中取出1个数，组成新的数组，要求数组1中取出的数小于数组2，数组2小于数组3，……输出所有可能的数组，如：
+
+```
+   输入
+   1,2,4
+   2,3,8
+   3,8,11
+   5,10,12
+   4,9,13
+   输出
+   1,2,3,5,9
+   1,2,3,5,13
+   1,2,3,10,13
+   1,2,3,12,13
+   1,2,8,10,13
+   1,2,8,12,13
+   1,2,11,12,13
+   1,3,8,10,13
+   1,3,8,12,13
+   1,3,11,12,13
+   1,8,11,12,13
+   2,3,8,10,13
+   2,3,8,12,13
+   2,3,11,12,13
+   2,8,11,12,13
+   4,8,11,12,13
+```
+
+非常暴力的解法
+
+```java
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Scanner;
+import java.util.stream.Collectors;
+
+public class TraditionalSolution {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        while (in.hasNext()) {
+            List<List<Integer>> inputLists = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                String s = in.next();
+                List<Integer> collect = Arrays.stream(s.split(",")).map(Integer::valueOf).collect(Collectors.toList());
+                inputLists.add(collect);
+            }
+            List<List<Integer>> outLists = new ArrayList<>();
+            for (int i = 0; i < inputLists.get(0).size(); i++) { // 第一行
+                for (int j = 0; j < inputLists.get(1).size(); j++) { // 第二行
+                    for (int k = 0; k < inputLists.get(2).size(); k++) { // 第三行
+                        for (int l = 0; l < inputLists.get(3).size(); l++) { // 第四行
+                            for (int m = 0; m < inputLists.get(4).size(); m++) { // 第五行
+                                if (inputLists.get(0).get(i) < inputLists.get(1).get(j)
+                                        && inputLists.get(1).get(j) < inputLists.get(2).get(k)
+                                        && inputLists.get(2).get(k) < inputLists.get(3).get(l)
+                                        && inputLists.get(3).get(l) < inputLists.get(4).get(m)) {
+                                    List<Integer> out = new ArrayList<>();
+                                    out.add(inputLists.get(0).get(i));
+                                    out.add(inputLists.get(1).get(j));
+                                    out.add(inputLists.get(2).get(k));
+                                    out.add(inputLists.get(3).get(l));
+                                    out.add(inputLists.get(4).get(m));
+                                    outLists.add(out);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            outLists.forEach(l -> {
+                if (l.size() == 5) {
+                    String line = l.stream().map(Object::toString).collect(Collectors.joining(","));
+                    System.out.println(line);
+                }
+            });
+        }
+    }
+}
+```
+
+使用递归
+
+```java
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class RecursiveSolution {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        while (in.hasNext()) {
+            List<List<Integer>> inputLists = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                String s = in.next();
+                List<Integer> collect = Arrays.stream(s.split(",")).map(Integer::valueOf).collect(Collectors.toList());
+                inputLists.add(collect);
+            }
+            List<List<Integer>> outLists = findArrays(inputLists, null, 0);
+            outLists.forEach(l -> {
+                if (l.size() == 5) {
+                    String line = l.stream().map(Object::toString).collect(Collectors.joining(","));
+                    System.out.println(line);
+                }
+            });
+        }
+    }
+
+    private static List<List<Integer>> findArrays(List<List<Integer>> inputLists, List<Integer> path, int n) {
+        if (path == null) { // 第一行
+            path = new ArrayList<>();
+        }
+        List<Integer> integers = inputLists.get(n);
+        List<List<Integer>> outLists = new ArrayList<>();
+        if (inputLists.size() == n + 1) { // 最后一行
+            for (Integer integer : integers) {
+                if (integer > path.get(path.size() - 1)) {
+                    List<Integer> list = new ArrayList<>(path);
+                    list.add(integer);
+                    outLists.add(list);
+                }
+            }
+            return outLists;
+        }
+        for (Integer integer : integers) {
+            if (path.size() == 0 || integer > path.get(path.size() - 1)) {
+                List<Integer> list = new ArrayList<>(path);
+                list.add(integer);
+                List<List<Integer>> childLists = findArrays(inputLists, list, n + 1);
+                outLists.addAll(childLists);
+            }
+        }
+        return outLists;
+    }
+}
+```
+
+5、给一个无重复的数组 C，和一个数 S，判断里面是否有两个数的和为 S，列出所有可能组合（要求输出的两个数第一个数要小于第二个数）
+
+示例
+
+```
+输入
+4 3 1 9 8 10 14 21 5 6
+11
+
+输出
+3 8
+1 10
+5 6
+```
+
+代码
+
+```java
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class MyTest {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        String numbers = in.nextLine();
+        String s = in.nextLine();
+
+        String[] split = numbers.split(" ");
+        List<Integer> inputs = Arrays.stream(split).map(Integer::parseInt).collect(Collectors.toList());
+        int total = Integer.parseInt(s);
+
+        Map<Integer, Integer> map = new HashMap<>();//数
+        for (int num : inputs) {
+            map.put(num, total - num);
+        }
+        List<Map.Entry<Integer, Integer>> collect = map.entrySet().stream()
+                .filter(x -> x.getKey() <= x.getValue() && inputs.contains(x.getValue()))
+                .sorted(Map.Entry.comparingByKey())
+                .collect(Collectors.toList());
+
+        collect.forEach(e -> System.out.println(e.getKey() + " " + e.getValue()));
+    }
+}
+```
+
+优化解法
+
+```java
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class MyTest2 {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        String numbers = in.nextLine();
+        String s = in.nextLine();
+        String[] split = numbers.split(" ");
+        List<Integer> inputs = Arrays.stream(split).map(Integer::parseInt).collect(Collectors.toList());
+        int total = Integer.parseInt(s);
+
+        Map<Integer, Integer> record = new HashMap<>();// 遍历过的数
+        Map<Integer, Integer> result = new LinkedHashMap<>();// 存放结果
+        for (int num : inputs) {
+            int remainder = total - num;
+            if (record.get(remainder) != null) {
+                result.put(Math.min(num, remainder), Math.max(num, remainder));
+            } else {
+                record.put(num, 1);
+            }
+        }
+
+        result.forEach((key, value) -> System.out.println(key + " " + value));
+    }
+}
+```
+
+6、最大矩形面积
+
+该题即 [84. 柱状图中最大的矩形 - 力扣（LeetCode）](https://leetcode-cn.com/problems/largest-rectangle-in-histogram/)
+
+给定一组非负整数组成的数组h，代表一组柱状图的高度，其中每个柱子的宽度都为1。 在这组柱状图中找到能组成的最大矩形的面积（如图所示）。入参h为一个整型数组，代表每个柱子的高度，返回面积的值。
+
+![image.png](https://i.loli.net/2020/03/10/YNHcjEJmk41UfRe.png)
+
+输入描述
+
+输入包括两行,第一行包含一个整数n(1 ≤ n ≤ 10000)
+
+第二行包括n个整数,表示h数组中的每个值,h_i(1 ≤ h_i ≤ 1,000,000)
+
+输出描述
+
+输出一个整数,表示最大的矩阵面积。
+
+示例1
+
+```
+输入
+6
+2 1 5 6 2 3
+输出
+10
+```
+
+代码
+
+```java
+import java.util.Arrays;
+import java.util.List;
+import java.util.Scanner;
+import java.util.stream.Collectors;
+
+
+public class MyTest3 {
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        String s = in.nextLine();
+        String numbers = in.nextLine();
+        String[] split = numbers.split(" ");
+        List<Integer> inputs = Arrays.stream(split).map(Integer::parseInt).collect(Collectors.toList());
+        int n = Integer.parseInt(s);
+
+        //滑动窗口
+        int area = 0;
+        for (int x = 0; x < n; x++) {
+            int high = inputs.get(x);
+            int width = 0;
+            for (int i = x; i < n; i++) {
+                high = Math.min(inputs.get(i), high);
+                width = width + 1;
+                area = Math.max(high * width, area);
+            }
+        }
+        System.out.println(area);
+    }
+}
+
+```
+
+</textarea>
