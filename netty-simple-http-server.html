@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Netty编写一个极简的Http服务器</title>
+    <script src="https://cdn.jsdelivr.net/npm/texme@0.9.0"></script>
+</head>
+<body>
+<textarea>
+# Netty编写一个极简的Http服务器
+
+Netty是一个高性能的网络编程框架，有着简单易于使用的抽象模型。利用Netty自带的Http协议编解码器，我们可以快速地以较少的代码编写一个简单的Http服务器。
+
+本文主要介绍如何使用Netty实现一个极简的Http服务器，主要功能是通过接收一个浏览器Http请求，Netty服务器返回一个静态资源页面。
+
+为了实现Http服务器，我们只需要用到Netty自带的两个编解码器：
+
+- HttpServerCodec：用于Netty服务端，该类其实是`HttpRequestDecoder`和`HttpResponseEncoder`的封装，因此我们在`ChannelPipeline`中加入`HttpServerCodec`即可实现Http请求的解码和Http响应的编码；
+- HttpObjectAggregator：Http请求经过`HttpServerCodec`解码之后是`HttpRequest`和`HttpContents`对象，`HttpObjectAggregator`会将多个`HttpRequest`和`HttpContents`对象再拼装成一个`FullHttpRequest`，再将其传递到下个`Handler`。
+
+首先，我们首先创建一个maven项目，在`pom.xml`文件中添加`netty-all`依赖即可：
+
+```xml
+<dependency>
+  <groupId>io.netty</groupId>
+  <artifactId>netty-all</artifactId>
+  <version>4.1.32.Final</version>
+</dependency>
+```
+
+第二步，编写`HttpServer`类，作为Http服务启动的入口。此处我们通过命令行传入Http服务启动的端口号。`HttpServer`类代码如下：
+
+```java
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpServerCodec;
+
+import java.net.InetSocketAddress;
+
+public class HttpServer {
+
+    private final int port;
+
+    public HttpServer(int port) {
+        this.port = port;
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length != 1) {
+            System.err.println("Usage: " + HttpServer.class.getSimpleName() + " <port>");
+            return;
+        }
+        int port = Integer.parseInt(args[0]);
+        new HttpServer(port).start();
+    }
+
+    public void start() throws Exception {
+        NioEventLoopGroup group = new NioEventLoopGroup();
+        try {
+            ServerBootstrap b = new ServerBootstrap();
+            b.group(group)
+                    .channel(NioServerSocketChannel.class)
+                    .localAddress(new InetSocketAddress(port))
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        public void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast("codec", new HttpServerCodec())
+                                    .addLast("aggregator", new HttpObjectAggregator(512 * 1024))
+                                    .addLast(new HttpRequestHandler());
+                        }
+                    });
+
+            ChannelFuture f = b.bind().sync();
+            System.out.println(HttpServer.class.getName() + " started and listen on " + f.channel().localAddress());
+            f.channel().closeFuture().sync();
+        } finally {
+            group.shutdownGracefully().sync();
+        }
+    }
+}
+```
+
+接下来需要编写我们自己的`HttpRequestHandler`，来处理Http请求相关的业务需求，即通过接收一个Http请求，返回一个静态资源页面的功能。
+
+我们先创建一个index.html，并把它放到`/src/main/resources`目录下，index文件如下所示：
+
+```html
+<html>
+<head>
+    <title>Hello Netty</title>
+    <meta charset="UTF-8">
+</head>
+<body>
+<h1>Hello Netty</h1>
+<p>Netty Http Server测试</p>
+</body>
+</html>
+```
+
+`HttpRequestHandler`类如下：
+
+```java
+import io.netty.channel.*;
+import io.netty.handler.codec.http.*;
+
+import java.io.File;
+import java.io.RandomAccessFile;
+
+public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) throws Exception {
+        String url = this.getClass().getResource("/").getPath() + "index.html";
+        File file  = new File(url);
+        RandomAccessFile raf = new RandomAccessFile(file, "r");
+        HttpResponse response = new DefaultHttpResponse(msg.protocolVersion(), HttpResponseStatus.OK);
+        ctx.write(response);
+        ctx.write(new DefaultFileRegion(raf.getChannel(),0, raf.length()));
+        ChannelFuture future = ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
+        future.addListener(ChannelFutureListener.CLOSE);
+    }
+}
+```
+
+代码只有很少的几行。首先我们获取`index.html`所在的路径， 创建`RandomAccessFile`对象指向`index.html`文件。通过调用`ChannelHandlerContext`的`write`方法写入一个`HttpResponse`，其中包含了Http协议版本和服务端200的响应码。接着再写入`index.html`文件内容，最后再写入`LastHttpContent`并同时调用`flush`。最后在`ChannelFuture`上增加监听器以便在Http响应完成后关闭`channel`。
+
+我们通过命令行启动Http服务器，同时指定相应端口。打开浏览器访问后效果如下：
+
+![https://i.loli.net/2021/01/10/hUAzm5JHaWvqfB2.png](https://i.loli.net/2021/01/10/hUAzm5JHaWvqfB2.png)
+</textarea>
+</body>
+</html>

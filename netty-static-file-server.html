@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Netty编写一个静态资源服务器</title>
+    <script src="https://cdn.jsdelivr.net/npm/texme@0.9.0"></script>
+</head>
+<body>
+<textarea>
+# Netty编写一个静态资源服务器
+
+上一篇文章我们了解了如何[Netty编写一个极简的Http服务器](https://pjye.github.io/notes/netty-simple-http-server.html) ，这一篇文章在上一篇文章的基础上，进一步编写一个静态资源服务器。
+
+首先，`HttpServer`类与之前相同，不需要作修改，具体代码请见[Netty编写一个极简的Http服务器](https://pjye.github.io/notes/netty-simple-http-server.html) 。我们修改`HttpRequestHandler`，来实现对静态资源请求的响应。
+
+为了方便对Http请求的处理，我们先作如下规定：
+
+- 如果请求URI为“/”或“/index.html”，则直接返回index.html文件；
+- 如果请求URI以“/static”开头，则从`/src/main/resources/static`目录下根据URI中的文件名查找对应文件并返回给浏览器；
+- 如果请求URI不符合以上规则，则直接返回404未找到的Http响应。
+
+首先我们在`/src/main/resources`目录下创建`static`文件夹，并添加几个测试文件，目录结构大概如下：
+
+```
+src
+└── main
+    ├── java
+    │   └── ...
+    └── resources
+        ├── index.html
+        └── static
+            ├── test-image.jpg
+            ├── test.txt
+            └── 测试.txt
+```
+
+对`HttpRequestHandler`的`channelRead0`方法修改如下：
+
+```java
+public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) throws Exception {
+        System.out.println("request uri: " + msg.uri());
+        if ("/".equals(msg.uri()) || "/index.html".equals(msg.uri())) {
+            handleResource(ctx, msg, "index.html");
+        } else if (msg.uri().startsWith("/static")) {
+            handleResource(ctx, msg, msg.uri().substring(1));
+        } else {
+            //处理请求链接不存在的情况
+            handleNotFound(ctx, msg);
+        }
+    }
+
+    //其他方法
+}
+```
+
+`handleNotFound`方法用于请求链接不存在时，返回404未找到响应，主要代码如下：
+
+```java
+private void handleNotFound(ChannelHandlerContext ctx, FullHttpRequest msg) {
+    ByteBuf content = Unpooled.copiedBuffer("URL not found", CharsetUtil.UTF_8);
+    HttpResponse response = new DefaultFullHttpResponse(msg.protocolVersion(), HttpResponseStatus.NOT_FOUND, content);
+    ChannelFuture future = ctx.writeAndFlush(response);
+    future.addListener(ChannelFutureListener.CLOSE);
+}
+```
+
+`handleResource`方法用于处理静态资源请求，也包括处理对主页index.html访问的处理：
+
+```java
+private void handleResource(ChannelHandlerContext ctx, FullHttpRequest msg, String resource) throws IOException {
+    String url = this.getClass().getResource("/").getPath() + resource;
+    File file = new File(url);
+    if (!file.exists()) {
+        handleNotFound(ctx, msg);
+        return;
+    }
+    if (file.isDirectory()) {
+        handleDirectory(ctx, msg, file);
+        return;
+    }
+    handleFile(ctx, msg, file);
+}
+```
+
+`handleResource`方法首先根据请求的文件名，拼装文件磁盘路径，获取对应的文件。如果文件不存在，则返回404的Http响应；如果对应路径是文件夹，则列出文件夹下的子文件；如果是文件，则返回对应的文件内容。
+
+`handleDirectory`代码如下，此处只是简单地列出文件夹下的文件名称，还有很多细节需要完善。
+
+```java
+private void handleDirectory(ChannelHandlerContext ctx, FullHttpRequest msg, File file) {
+    StringBuilder sb = new StringBuilder();
+    File[] files = file.listFiles();
+    if (files != null) {
+        for (File f : files) {
+            if (f.isHidden() || !f.canRead()) {
+                continue;
+            }
+            String name = f.getName();
+            sb.append(name).append("<br/>");
+        }
+    }
+    ByteBuf buffer = ctx.alloc().buffer(sb.length());
+    buffer.writeCharSequence(sb.toString(), CharsetUtil.UTF_8);
+    FullHttpResponse response = new DefaultFullHttpResponse(msg.protocolVersion(), HttpResponseStatus.OK, buffer);
+    response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+    ChannelFuture future = ctx.writeAndFlush(response);
+    future.addListener(ChannelFutureListener.CLOSE);
+}
+```
+
+`handleFile`方法如下：
+
+```java
+private void handleFile(ChannelHandlerContext ctx, FullHttpRequest msg, File file) throws IOException {
+    RandomAccessFile raf = new RandomAccessFile(file, "r");
+    HttpHeaders headers = getContentTypeHeader(file);
+    HttpResponse response = new DefaultHttpResponse(msg.protocolVersion(), HttpResponseStatus.OK, headers);
+    ctx.write(response);
+    ctx.write(new DefaultFileRegion(raf.getChannel(), 0, raf.length()));
+    ChannelFuture future = ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
+    future.addListener(ChannelFutureListener.CLOSE);
+}
+```
+
+`getContentTypeHeader`方法：
+
+```java
+private HttpHeaders getContentTypeHeader(File file) {
+    MimetypesFileTypeMap mimeTypesMap = new MimetypesFileTypeMap();
+    HttpHeaders headers = new DefaultHttpHeaders();
+    String contentType = mimeTypesMap.getContentType(file);
+    if (contentType.equals("text/plain")) {
+        //由于文本在浏览器中会显示乱码，此处指定为utf-8编码
+        contentType = "text/plain;charset=utf-8";
+    }
+    headers.set(HttpHeaderNames.CONTENT_TYPE, contentType);
+    return headers;
+}
+```
+
+通过Java的`MimetypesFileTypeMap`工具类获取要传给浏览器的`contentType`，并将`contentType`设置到header中。测试过程中发现utf-8编码的txt文件在浏览器中会显示成乱码，因此如果获取的是文本文件，则将`contentType`从`text/plain`改为`text/plain;charset=utf-8`。
+
+最终效果如下：
+
+文件列表
+
+![https://i.loli.net/2021/01/14/hKUfXHL75Trnv6c.png](https://i.loli.net/2021/01/14/hKUfXHL75Trnv6c.png)
+
+txt文件内容
+
+![https://i.loli.net/2021/01/14/l1nqQWaY5iLgokZ.png](https://i.loli.net/2021/01/14/l1nqQWaY5iLgokZ.png)
+
+获取图片文件
+
+![https://i.loli.net/2021/01/15/h597pMyrDNinRjP.png](https://i.loli.net/2021/01/15/h597pMyrDNinRjP.png)
+</textarea>
+</body>
+</html>
