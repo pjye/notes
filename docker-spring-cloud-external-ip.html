@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>docker运行Spring Cloud使用外部IP</title>
+    <script src="https://cdn.jsdelivr.net/npm/texme@0.9.0"></script>
+</head>
+<body>
+<textarea>
+# docker运行Spring Cloud使用外部IP
+
+在多机器上docker部署Spring Cloud发现有一个问题，即在docker容器内部，Spring Cloud eureka实例只能获取到docker内部网络的IP，如172.x.x.x，并将其注册到注册中心，此时其他服务通过该IP在docker外部无法访问该服务。以下有两种解决方法：
+
+## 方法一：手动配置宿主机IP
+
+启动容器时将宿主机的IP加到容器环境变量中然后在Spring Boot `application.yml`中使用该环境变量。
+
+application.yml
+
+```
+eureka:
+  instance:
+    # Necessary for Docker as it doesn't have DNS entries
+    prefer-ip-address: true
+    # Necessary for Docker otherwise you will get 172.0.0.x IP
+    ip-address: "${HOST}"
+  client:
+    serviceUrl:
+      # Location of your eureka server
+      defaultZone: <http://192.168.0.107:8761/eureka/>
+```
+
+启动docker时加入`HOST`环境变量：
+
+```
+docker run -p <port>:<port> -e HOST='192.168.0.106' <image name>
+```
+
+或使用docker-compose：
+
+```
+my_service:
+  image: image_name
+  environment:
+    - HOST=192.168.0.106
+  ports:
+    - your_port:container_port
+```
+
+## 方法二：以host模式运行容器
+
+将容器以host模式运行
+
+```
+docker run --net=host <image name>
+```
+
+在Spring Cloud中配置IP访问
+
+```
+#注册时使用ip而不是主机名
+eureka.instance.prefer-ip-address=true
+eureka.instance.instance-id=${spring.cloud.client.ipaddress}:${server.port}
+eureka.instance.hostname=${spring.cloud.client.ipaddress}
+```
+
+多网卡的情况
+
+指定IP在某些场景下很有用，如某台服务器有eth0、eth1和eth2三块网卡，但是eth1可以被其它的服务器访问；如果Eureka Client将eth0或者eth2注册到Eureka Server上，其它微服务就无法通过这个IP调用该微服务的接口。
+
+```
+#忽略eth0,支持正则表达式
+spring.cloud.inetutils.ignored-interfaces[0]=eth0
+```
+
+## 其他
+
+若在生产环境中使用，一般就不会直接使用IP注册到eureka注册中心了，由于生产环境通常由k8s集群或其他类似docker集群进行管理，因此一般会使用服务名等进行注册，由k8s再转发到具体的服务上。
+
+参考链接：
+
+- [Register to Eureka from Docker with a custom IP - Stack Overflow](https://stackoverflow.com/questions/30349811/register-to-eureka-from-docker-with-a-custom-ip)
+- [Srping Cloud部署在Docker内时在多网卡模式下如何选择IP - 风琳博客](https://www.reinforce.cn/t/574.html)
+</textarea>
+</body>
