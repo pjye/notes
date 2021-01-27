@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Netty使用Protobuf编解码</title>
+    <script src="https://cdn.jsdelivr.net/npm/texme@0.9.0"></script>
+</head>
+<body>
+<textarea>
+# Netty使用Protobuf编解码
+
+## Protocol Buffers介绍
+
+Protocol Buffers（Protobuf）是Google推出的语言无关，平台无关的可扩展机制，用于序列化结构数据。由于是一种二进制的序列化协议，并且数据结构做了相应优化，因此比传统的XML、JSON数据格式序列化后体积更小，传输更快。Protobuf有proto2和proto3两个版本，有着不同的数据格式定义，在这里我们使用proto3版本。Protobuf使用了一个编译器，可根据`.proto`文件中定义的数据结构，自动生成各种语言的模板代码，方便使用。
+
+## 一个hello world示例程序
+
+我们以一个`hello world`的例子来尝试在Netty中使用Protobuf：编写一个`GreetClient`，向服务端发送用户姓名name（如world）；服务端接收到请求，在姓名name前面添加前缀hello（如name为hello，添加前缀变为`hello word`），并将该消息message返回给客户端。这个例子参考了[grpc官方的hello world例子](https://github.com/grpc/grpc-java/tree/master/examples/src/main/java/io/grpc/examples/helloworld)。
+
+## 编写helloworld.proto文件
+
+首先我们编写一个`helloworld.proto`文件，内容如下：
+
+```java
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.alphabc.netty.protobuf.helloworld";
+option java_outer_classname = "HelloWorldProto";
+option objc_class_prefix = "HLW";
+
+package helloworld;
+
+// The request message containing the user's name.
+message HelloRequest {
+    string name = 1;
+}
+
+// The response message containing the greetings
+message HelloReply {
+    string message = 1;
+}
+```
+
+## 编译生成Java代码
+
+从[Protobuf的官方github release页面](https://github.com/protocolbuffers/protobuf/releases)下载对应操作系统上需要用到的编译器文件，并解压得到protoc。
+
+为了使用protoc将`helloworld.proto`文件编译成Java代码，进入项目目录执行以下命令：
+
+```bash
+protoc --java_out=src/main/java  src/main/java/com/alphabc/netty/protobuf/helloworld/helloworld.proto
+```
+
+最终生成的类目录结构大致如下：
+
+```bash
+src/main/java/com/alphabc/netty/protobuf/helloworld
+			├── HelloReply.java
+			├── HelloReplyOrBuilder.java
+			├── HelloRequest.java
+			├── HelloRequestOrBuilder.java
+			├── HelloWorldProto.java
+			└── helloworld.proto
+```
+
+由于生成的模板代码较多，此处就不贴出来了。
+
+## 引入Maven依赖
+
+引入Netty和Protobuf的Maven依赖如下：
+
+```xml
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-all</artifactId>
+      <version>4.1.32.Final</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+      <version>3.11.0</version>
+    </dependency>
+```
+
+## 测试Protobuf的序列化和反序列化
+
+编写Protobuf的序列化和反序列化测试类如下：
+
+```java
+package com.alphabc.netty.protobuf;
+
+import com.alphabc.netty.protobuf.helloworld.HelloRequest;
+import com.google.protobuf.InvalidProtocolBufferException;
+
+public class ProtobufTest {
+
+    public static void main(String[] args) throws InvalidProtocolBufferException {
+        HelloRequest helloRequest = HelloRequest.newBuilder().setName("Jack").build();
+        byte[] bytes = helloRequest.toByteArray();
+        HelloRequest parse = HelloRequest.parseFrom(bytes);
+        System.out.println(parse.toString());
+        System.out.println(parse.getName());
+    }
+}
+```
+
+执行后控制台输出：
+
+```bash
+name: "Jack"
+
+Jack
+```
+
+## 编写服务端和客户端代码
+
+编写Netty服务端`GreetServer`代码：
+
+```java
+package com.alphabc.netty.protobuf;
+
+import com.alphabc.netty.protobuf.helloworld.HelloRequest;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.protobuf.ProtobufDecoder;
+import io.netty.handler.codec.protobuf.ProtobufEncoder;
+import io.netty.handler.codec.protobuf.ProtobufVarint32FrameDecoder;
+import io.netty.handler.codec.protobuf.ProtobufVarint32LengthFieldPrepender;
+
+import java.net.InetSocketAddress;
+
+public class GreetServer {
+
+    private final int port;
+
+    public GreetServer(int port) {
+        this.port = port;
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length != 1) {
+            System.err.println("Usage: " + GreetServer.class.getSimpleName() + " <port>");
+            return;
+        }
+        int port = Integer.parseInt(args[0]);
+        new GreetServer(port).start();
+    }
+
+    public void start() throws Exception {
+        NioEventLoopGroup bossGroup = new NioEventLoopGroup();
+        NioEventLoopGroup workerGroup = new NioEventLoopGroup();
+        try {
+            ServerBootstrap b = new ServerBootstrap();
+            b.group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .localAddress(new InetSocketAddress(port))
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        public void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast(new ProtobufVarint32FrameDecoder())
+                                    .addLast(new ProtobufDecoder(HelloRequest.getDefaultInstance()))
+                                    .addLast(new ProtobufVarint32LengthFieldPrepender())
+                            .addLast(new ProtobufEncoder())
+                            .addLast(new GreetServerHandler());
+                        }
+                    });
+            ChannelFuture f = b.bind().sync();
+            System.out.println(GreetServer.class.getName() + " started and listen on " + f.channel().localAddress());
+            f.channel().closeFuture().sync();
+        } finally {
+            bossGroup.shutdownGracefully().sync();
+            workerGroup.shutdownGracefully().sync();
+        }
+    }
+}
+```
+
+服务端处理器`GreetServerHandler`代码如下：
+
+```java
+package com.alphabc.netty.protobuf;
+
+import com.alphabc.netty.protobuf.helloworld.HelloReply;
+import com.alphabc.netty.protobuf.helloworld.HelloRequest;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+
+public class GreetServerHandler extends SimpleChannelInboundHandler<HelloRequest> {
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, HelloRequest msg) throws Exception {
+        System.out.println("request: " + msg.getName());
+        HelloReply reply = HelloReply.newBuilder().setMessage("Hello " + msg.getName()).build();
+        ChannelFuture future = ctx.writeAndFlush(reply);
+        future.addListener(ChannelFutureListener.CLOSE);
+    }
+}
+```
+
+Netty客户端代码：
+
+```java
+package com.alphabc.netty.protobuf;
+
+import com.alphabc.netty.protobuf.helloworld.HelloReply;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.protobuf.ProtobufDecoder;
+import io.netty.handler.codec.protobuf.ProtobufEncoder;
+import io.netty.handler.codec.protobuf.ProtobufVarint32FrameDecoder;
+import io.netty.handler.codec.protobuf.ProtobufVarint32LengthFieldPrepender;
+
+import java.net.InetSocketAddress;
+
+public class GreetClient {
+
+    private final String host;
+    private final int port;
+
+    public GreetClient(String host, int port) {
+        this.host = host;
+        this.port = port;
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length != 2) {
+            System.err.println("Usage: " + GreetClient.class.getSimpleName() + " <host> <port>");
+            return;
+        }
+
+        final String host = args[0];
+        final int port = Integer.parseInt(args[1]);
+
+        new GreetClient(host, port).start();
+    }
+
+    private void start() throws Exception {
+        EventLoopGroup group = new NioEventLoopGroup();
+        try {
+            Bootstrap b = new Bootstrap();
+            b.group(group)
+                    .channel(NioSocketChannel.class)
+                    .remoteAddress(new InetSocketAddress(host, port))
+                    .handler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        public void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast(new ProtobufVarint32FrameDecoder())
+                            .addLast(new ProtobufDecoder(HelloReply.getDefaultInstance()))
+                                    .addLast(new ProtobufVarint32LengthFieldPrepender())
+                                    .addLast(new ProtobufEncoder())
+                                    .addLast(new GreetClientHandler());
+                        }
+                    });
+            ChannelFuture f = b.connect().sync();
+            f.channel().closeFuture().sync();
+        } finally {
+            group.shutdownGracefully().sync();
+        }
+    }
+}
+```
+
+客户端处理器`GreetClientHandler`：
+
+```java
+package com.alphabc.netty.protobuf;
+
+import com.alphabc.netty.protobuf.helloworld.HelloReply;
+import com.alphabc.netty.protobuf.helloworld.HelloRequest;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+
+public class GreetClientHandler extends SimpleChannelInboundHandler<HelloReply> {
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, HelloReply msg) throws Exception {
+        System.out.println("Greeting: " + msg.getMessage());
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        HelloRequest request = HelloRequest.newBuilder().setName("world").build();
+        ctx.writeAndFlush(request);
+    }
+}
+```
+
+## 代码测试
+
+首先启动服务端，监听于5000端口，再启动客户端进行测试。
+
+服务端控制台输出如下：
+
+```bash
+com.alphabc.netty.protobuf.GreetServer started and listen on /0:0:0:0:0:0:0:0:5000
+request: world
+```
+
+客户端控制台输出如下：
+
+```bash
+Greeting: Hello world
+```
+
+## 总结
+
+从`hello world`示例程序可以看出，Netty已经为我们内置相应的Protobuf编解码器，编写一个使用Protobuf协议的服务端和客户端还是相对简单的，但是要写好还是有很多事情要处理，如异常处理和支持多个Protobuf消息等等问题。
+
+## 参考资料
+
+- [GitHub - protocolbuffers/protobuf: Protocol Buffers - Google's data interchange format](https://github.com/protocolbuffers/protobuf)
+- [Protocol Buffers | Google Developers](https://developers.google.com/protocol-buffers/)
+- [Language Guide (proto3) | Protocol Buffers | Google Developers](https://developers.google.com/protocol-buffers/docs/proto3)
+- [Protocol Buffer Basics: Java | Protocol Buffers | Google Developers](https://developers.google.com/protocol-buffers/docs/javatutorial)
+- [grpc-java/examples/src/main/java/io/grpc/examples/helloworld at master · grpc/grpc-java](https://github.com/grpc/grpc-java/tree/master/examples/src/main/java/io/grpc/examples/helloworld)
+</textarea>
+</body>
