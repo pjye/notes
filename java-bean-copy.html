@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Java对象拷贝工具类汇总</title>
+    <script src="https://cdn.jsdelivr.net/npm/texme@1.0.0"></script>
+</head>
+<body>
+<textarea>
+
+# Java对象拷贝工具类汇总
+
+- [Java对象拷贝工具类汇总](#java对象拷贝工具类汇总)
+  - [前言](#前言)
+  - [浅拷贝（Shadow Copy）](#浅拷贝shadow-copy)
+    - [手动复制](#手动复制)
+    - [Object类的clone()方法](#object类的clone方法)
+    - [Apache BeanUtils 性能较差](#apache-beanutils-性能较差)
+    - [Apache PropertyUtils](#apache-propertyutils)
+    - [Spring BeanUtils](#spring-beanutils)
+    - [Cglib BeanCopier 性能较好](#cglib-beancopier-性能较好)
+    - [MapStruct（浅拷贝和深拷贝）性能较好](#mapstruct浅拷贝和深拷贝性能较好)
+  - [深拷贝（Deep Copy）](#深拷贝deep-copy)
+    - [Java原生序列化和反序列化](#java原生序列化和反序列化)
+    - [Apache SerializationUtils](#apache-serializationutils)
+    - [Json序列化和反序列化](#json序列化和反序列化)
+    - [Dozer](#dozer)
+  - [总结](#总结)
+
+## 前言
+
+由于在项目中经常需要使用到Java的对象拷贝和属性复制，如DTO、VO和数据库Entity之间的转换，因此本文对需要用到的相关方法、工具类做一个汇总，包括浅拷贝和深拷贝，方便在需要用到时作为参考。
+
+## 浅拷贝（Shadow Copy）
+
+### 手动复制
+
+手动new对象，并设置相应字段的值，在字段较少时比较方便。另外就是由于是手动赋值，安全性较高，不容易出错，并且性能最好。
+
+比如有如下一个类：
+
+```java
+public class User {
+
+    private String name;
+    private int age;
+    private Address address;
+
+    //getter and setters
+}
+```
+
+复制的时候只需简单地创建新的对象并赋值：
+
+```java
+User newUser = new User();
+newUser.setName(oldUser.getName());
+newUser.setAge(oldUser.getAge());
+newUser.setAddress(oldUser.getAddress());
+```
+
+### Object类的clone()方法
+
+这个方法需要实现Cloneable接口（浅拷贝）。要实现深拷贝，如果类中的字段类型是可变类型，也需要重写可变类型的clone方法。同样以User类为例：
+
+```java
+@Getter
+@Setter
+public class User implements Cloneable {
+
+    private String name;
+    private int age;
+    private Address address;
+
+    @Override
+    public User clone() {
+        try {
+            User newUser = (User) super.clone();
+            //实现深拷贝需要如下手动set
+            Address address = newUser.getAddress();
+            Address newAddress = address.clone();
+            newUser.setAddress(newAddress);
+            return newUser;
+        } catch (CloneNotSupportedException e) {
+            throw new AssertionError();
+        }
+    }
+
+}
+```
+
+Address类：
+
+```java
+@Getter
+@Setter
+public class Address implements Cloneable {
+    private String province;
+    private String city;
+
+    @Override
+    public Address clone() {
+        try {
+            return (Address) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new AssertionError();
+        }
+    }
+}
+```
+
+使用如下：
+
+```java
+User newUser = oldUser.clone();
+```
+
+### Apache BeanUtils 性能较差
+
+pom文件中引入如下依赖：
+
+```xml
+<dependency>
+    <groupId>commons-beanutils</groupId>
+    <artifactId>commons-beanutils</artifactId>
+    <version>1.9.4</version>
+</dependency>
+```
+
+使用如下：
+
+```java
+User newUser = new User();
+BeanUtils.copyProperties(newUser, oldUser);//复制字段名、类型相同的
+```
+
+或
+
+```java
+User newUser = (User) BeanUtils.cloneBean(oldUser);
+```
+
+### Apache PropertyUtils
+
+PropertyUtils用法跟BeanUtils相同，这里需要注意的是PropertyUtils不支持类型转换功能。
+
+使用BeanUtils.copyProperties方法时，BeanUtils会调用默认的转换器（Convertor），在八个基本类型间进行转换，不能转换则抛出异常。
+
+使用PropertyUtils.copyProperties方法时，若两同名属性不是同一类型，则直接抛出 `java.lang.IllegalArgumentException: argument type mismatch` 异常。
+
+我们新建一个UserDto来进行测试：
+
+```java
+@Getter
+@Setter
+public class UserDto {
+
+    private String name;
+    private Long age;//此处与User类不同，User类为int
+    private Address address;
+
+}
+```
+
+测试如下：
+
+```java
+UserDto dto = new UserDto();
+//以下正常执行
+BeanUtils.copyProperties(dto, oldUser);
+//以下方法会抛出IllegalArgumentException异常
+PropertyUtils.copyProperties(dto, oldUser);
+```
+
+若UserDto类中age类型改为Integer，则不会报错，PropertyUtils会自动将int类型转为Integer。
+
+### Spring BeanUtils
+
+spring中也有BeanUtils.copyProperties方法，这里需要注意的时入参列表跟apache的BeanUtils.copyProperties方法相反，如下所示：
+
+```java
+BeanUtils.copyProperties(source, target);
+```
+
+测试如下：
+
+```java
+User newUser = new User();
+BeanUtils.copyProperties(oldUser, newUser);
+```
+
+另外spring中的BeanUtils.copyProperties方法比apache的性能要好，而且在spring项目中自带该工具类，推荐在spring项目中使用。
+
+### Cglib BeanCopier 性能较好
+
+cglib的BeanCopier由于使用到了字节码生成技术，在运行时生成相应的字节码，而不是使用Java的反射，因此性能要比Spring的BeanUtils，Apache的BeanUtils和PropertyUtils要好，推荐使用。
+
+使用时需要在pom文件中引入如下依赖：
+
+```xml
+<dependency>
+  <groupId>cglib</groupId>
+  <artifactId>cglib</artifactId>
+  <version>3.2.0</version>
+</dependency>
+```
+
+测试如下：
+
+```java
+final BeanCopier copier = BeanCopier.create(User.class, UserDto.class, false);
+UserDto dto = new UserDto();
+copier.copy(oldUser, dto, null);
+```
+
+这里需要注意的是如果有字段类型不同需要手动开启并指定Converter，不然同名字段属性不同不会进行拷贝，如以上例子oldUser中的age（int类型）不会拷贝到dto中的age（Long类型），dto中的age改为Integer类型也不会拷贝。
+
+### MapStruct（浅拷贝和深拷贝）性能较好
+
+MapStruct由于是在编译时生成相应的拷贝方法，因此性能很好，理论上拷贝速度是最快的。这里注意运行前需先进行 `mvn compile` 。
+
+pom文件中引入相应依赖：
+
+```xml
+...
+<properties>
+    <org.mapstruct.version>1.4.2.Final</org.mapstruct.version>
+</properties>
+...
+<dependencies>
+    <dependency>
+        <groupId>org.projectlombok</groupId>
+        <artifactId>lombok</artifactId>
+        <version>1.18.22</version>
+    </dependency>
+    <dependency>
+        <groupId>org.mapstruct</groupId>
+        <artifactId>mapstruct</artifactId>
+        <version>${org.mapstruct.version}</version>
+    </dependency>
+</dependencies>
+...
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <version>3.8.1</version>
+            <configuration>
+                <source>1.8</source> <!-- depending on your project -->
+                <target>1.8</target> <!-- depending on your project -->
+                <annotationProcessorPaths>
+                    <!-- 使用lombok需要加入以下path，并且需要放在最前面，不然不会生成相应的setter方法 -->
+                    <path>
+                        <groupId>org.projectlombok</groupId>
+                        <artifactId>lombok</artifactId>
+                        <version>1.18.22</version>
+                    </path>
+                    <path>
+                        <groupId>org.mapstruct</groupId>
+                        <artifactId>mapstruct-processor</artifactId>
+                        <version>${org.mapstruct.version}</version>
+                    </path>
+                </annotationProcessorPaths>
+            </configuration>
+        </plugin>
+    </plugins>
+</build>
+```
+
+创建mapper：
+
+```java
+import org.mapstruct.Mapper;
+import org.mapstruct.factory.Mappers;
+
+@Mapper
+public interface UserMapper {
+
+    UserMapper INSTANCE = Mappers.getMapper( UserMapper.class);
+
+    UserDto convert(User user);
+
+}
+```
+
+使用如下：
+
+```java
+UserDto userDto = UserMapper.INSTANCE.convert(oldUser);
+```
+
+mapstruct默认是浅拷贝，如果需要深拷贝，需要在mapper上加注解 ``@Mapper(mappingControl = DeepClone.class)` ，如下所示：
+
+```java
+import org.mapstruct.Mapper;
+import org.mapstruct.control.DeepClone;
+import org.mapstruct.factory.Mappers;
+
+@Mapper(mappingControl = DeepClone.class)
+public interface UserMapper {
+
+    UserMapper INSTANCE = Mappers.getMapper( UserMapper.class);
+
+    UserDto convert(User user);
+
+}
+```
+
+但是以上的 `DeepClone.class` 会导致同名字段在不同类型之间的自动转换失效，如果age从int转换为Long，会编译不通过，提示 `Consider to declare/implement a mapping method: "Long map(int value)".` 可自定义注解如下：
+
+```java
+@Retention(RetentionPolicy.CLASS)
+@MappingControl( MappingControl.Use.MAPPING_METHOD )
+@MappingControl( MappingControl.Use.BUILT_IN_CONVERSION )
+public @interface CustomDeepClone {
+}
+```
+
+在mapper上加注解 ``@Mapper(mappingControl = CustomDeepClone.class)` ，即可实现深拷贝并保证同名字段在不同类型之间的自动转换生效。
+
+## 深拷贝（Deep Copy）
+
+### Java原生序列化和反序列化
+
+类需要实现Serializable接口，如下所示：
+
+```java
+@Getter
+@Setter
+public class User implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    private String name;
+    private int age;
+    private Address address;
+
+}
+
+@Getter
+@Setter
+public class Address implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    private String province;
+    private String city;
+
+}
+```
+
+将对象序列化为bytes并从bytes反序列化：
+
+```java
+        User oldUser = ...;
+
+        //序列化为bytes
+        ByteArrayOutputStream bout = new ByteArrayOutputStream();
+        ObjectOutputStream oout = new ObjectOutputStream(bout);
+        oout.writeObject(oldUser);
+        oout.close();
+        byte[] bytes = bout.toByteArray();
+        bout.close();
+
+        //从bytes反序列化为object
+        ObjectInputStream oin = new ObjectInputStream(new ByteArrayInputStream(bytes));
+        User newUser = (User) oin.readObject();
+        oin.close();
+```
+
+### Apache SerializationUtils
+
+apache SerializationUtils使用的也是Java原生的序列化和反序列化，来实现对象的深拷贝，因此类也需要实现Serializable接口。
+
+pom文件中引入如下依赖：
+
+```xml
+<dependency>
+  <groupId>org.apache.commons</groupId>
+  <artifactId>commons-lang3</artifactId>
+  <version>3.10</version>
+</dependency>
+```
+
+使用如下：
+
+```java
+User newUser = SerializationUtils.clone(oldUser);
+```
+
+### Json序列化和反序列化
+
+- Gson
+
+引入Gson依赖：
+
+```xml
+<dependency>
+  <groupId>com.google.code.gson</groupId>
+  <artifactId>gson</artifactId>
+  <version>2.8.9</version>
+</dependency>
+```
+
+使用如下：
+
+```java
+User oldUser = ...;
+Gson gson = new Gson();
+User newUser = gson.fromJson(gson.toJson(oldUser), User.class);
+//不同类之间的深拷贝
+UserDto userDto = gson.fromJson(gson.toJson(oldUser), UserDto.class);
+```
+
+该方法也支持同名字段不同类型之间的转换，如将age字段在User和UserDto类中分别为int和Long，可拷贝成功。
+
+- Jackson
+
+引入Jackson依赖：
+
+```xml
+<dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>2.13.1</version>
+</dependency>
+```
+
+使用如下：
+
+```java
+User oldUser = ...;
+ObjectMapper mapper = new ObjectMapper();
+User newUser = mapper.readValue(mapper.writeValueAsBytes(oldUser), User.class);
+UserDto userDto = mapper.readValue(mapper.writeValueAsBytes(oldUser), UserDto.class);
+```
+
+Jackson同样支持同名字段不同类型之间的转换，由于Spring项目一般已经依赖了Jackson，推荐使用Jackson来实现对象的深拷贝。
+
+### Dozer
+
+引入dozer依赖：
+
+```xml
+<dependency>
+    <groupId>net.sf.dozer</groupId>
+    <artifactId>dozer</artifactId>
+    <version>5.4.0</version>
+</dependency>
+```
+
+使用如下：
+
+```java
+User oldUser = ...;
+Mapper mapper = new DozerBeanMapper();
+User newUser = mapper.map(oldUser, User.class);
+UserDto userDto = mapper.map(oldUser, UserDto.class);
+```
+
+## 总结
+
+以上总结了Java中进行对象属性复制、浅拷贝或深拷贝的各个方法工具类，可供使用时作为参考。至于在项目中具体使用哪个工具类，则需要根据业务情况、项目原先使用的依赖库等进行衡量，权衡性能和使用的方便性、安全性（避免出错）等，来选择合适的工具。文中有何错漏之处欢迎指出，参考链接后续更新……
+</textarea>
+</body>
+</html>
